@@ -2,43 +2,235 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 
-const ChessGame = () => {
-  // Game State
-  const [game, setGame] = useState(new Chess());
-  const [history, setHistory] = useState([new Chess().fen()]); // Stores all board states
-  const [currentMoveIndex, setCurrentMoveIndex] = useState(0); // Tracks current view
-  const [moveLog, setMoveLog] = useState([]);
+const PIECE_VALUES = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+
+const DIFFICULTIES = {
+  1: 'Beginner',
+  5: 'Intermediate',
+  10: 'Advanced',
+  15: 'Expert',
+  20: 'Master'
+};
+
+function GameStatus({ game, isThinking }) {
+  const getStatusMessage = () => {
+    if (game.isGameOver()) {
+      if (game.isCheckmate()) {
+        return `🎉 Checkmate! ${game.turn() === 'w' ? 'Black' : 'White'} wins!`;
+      }
+      if (game.isDraw()) return '🤝 Draw!';
+      return '🏁 Game Over';
+    }
+    if (game.inCheck()) return '⚠️ Check!';
+    if (isThinking) return '🤔 AI is thinking...';
+    return `${game.turn() === 'w' ? '⚪ White' : '⚫ Black'} to move`;
+  };
+
+  return (
+    <div className="bg-gradient-to-r from-amber-900 to-amber-800 p-4 rounded-lg shadow-lg border border-amber-700">
+      <p className="text-xl font-bold text-amber-50 text-center">
+        {getStatusMessage()}
+      </p>
+    </div>
+  );
+}
+
+function CapturedPieces({ captured, color }) {
+  const pieceSymbols = { p: '♟', n: '♞', b: '♝', r: '♜', q: '♛', k: '♚' };
   
-  // Settings State
-  const [gameMode, setGameMode] = useState('human'); // 'human' or 'ai'
-  const [aiLevel, setAiLevel] = useState(5); // 1-20
-  const [playerColor, setPlayerColor] = useState('w'); // 'w' or 'b'
+  const totalValue = captured.reduce((sum, piece) => sum + PIECE_VALUES[piece], 0);
+
+  return (
+    <div className="bg-stone-800 p-3 rounded-lg border border-stone-700">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-amber-300 font-bold">
+          {color === 'white' ? '⚪ White' : '⚫ Black'} Captured
+        </span>
+        <span className="text-amber-400 text-sm">+{totalValue}</span>
+      </div>
+      <div className="flex flex-wrap gap-1 min-h-[32px]">
+        {captured.map((piece, idx) => (
+          <span key={idx} className="text-2xl opacity-80">
+            {pieceSymbols[piece]}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MoveHistory({ moves, currentIndex }) {
+  return (
+    <div className="bg-stone-800 p-4 rounded-lg border border-stone-700 h-96 overflow-y-auto">
+      <h3 className="text-lg font-bold text-amber-300 mb-3 border-b border-stone-700 pb-2">
+        Move History
+      </h3>
+      <div className="space-y-1">
+        {moves.map((move, idx) => (
+          <div
+            key={idx}
+            className={`py-1 px-2 rounded transition-colors ${
+              idx === currentIndex - 1
+                ? 'bg-amber-900 text-amber-100'
+                : 'text-stone-400 hover:bg-stone-700'
+            }`}
+          >
+            <span className="opacity-60 mr-2">{Math.floor(idx / 2) + 1}.</span>
+            {move.split(': ')[1]}
+          </div>
+        ))}
+        {moves.length === 0 && (
+          <p className="text-stone-600 italic text-center py-4">No moves yet</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function HistoryControls({ currentIndex, historyLength, onNavigate, disabled }) {
+  const Button = ({ onClick, disabled, children, title }) => (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className="px-4 py-2 bg-stone-700 text-amber-100 rounded hover:bg-stone-600 disabled:opacity-30 disabled:cursor-not-allowed font-bold transition-all hover:scale-105 active:scale-95"
+    >
+      {children}
+    </button>
+  );
+
+  return (
+    <div className="flex justify-center gap-2 bg-stone-800 p-3 rounded-lg border border-stone-700">
+      <Button onClick={() => onNavigate('start')} disabled={disabled || currentIndex === 0} title="Start">
+        «
+      </Button>
+      <Button onClick={() => onNavigate('prev')} disabled={disabled || currentIndex === 0} title="Previous">
+        ‹
+      </Button>
+      <span className="px-4 py-2 text-amber-300 font-mono flex items-center min-w-[100px] justify-center">
+        Move {Math.floor(currentIndex / 2) + 1}
+      </span>
+      <Button onClick={() => onNavigate('next')} disabled={disabled || currentIndex === historyLength - 1} title="Next">
+        ›
+      </Button>
+      <Button onClick={() => onNavigate('end')} disabled={disabled || currentIndex === historyLength - 1} title="Current">
+        »
+      </Button>
+    </div>
+  );
+}
+
+function GameSettings({ gameMode, setGameMode, playerColor, setPlayerColor, aiLevel, setAiLevel, onStart }) {
+  return (
+    <div className="bg-stone-800 p-8 rounded-lg border-2 border-amber-700 shadow-2xl max-w-2xl mx-auto">
+      <h2 className="text-3xl font-bold text-amber-300 mb-6 text-center">
+        Game Setup
+      </h2>
+
+      <div className="space-y-6">
+        <div>
+          <label className="block text-amber-200 font-bold mb-3">Game Mode</label>
+          <div className="grid grid-cols-2 gap-4">
+            <button
+              onClick={() => setGameMode('human')}
+              className={`py-3 px-6 rounded-lg font-semibold transition-all ${
+                gameMode === 'human'
+                  ? 'bg-amber-700 text-white shadow-lg scale-105'
+                  : 'bg-stone-700 text-stone-300 hover:bg-stone-600'
+              }`}
+            >
+              👥 Human vs Human
+            </button>
+            <button
+              onClick={() => setGameMode('ai')}
+              className={`py-3 px-6 rounded-lg font-semibold transition-all ${
+                gameMode === 'ai'
+                  ? 'bg-amber-700 text-white shadow-lg scale-105'
+                  : 'bg-stone-700 text-stone-300 hover:bg-stone-600'
+              }`}
+            >
+              🤖 Human vs AI
+            </button>
+          </div>
+        </div>
+
+        {gameMode === 'ai' && (
+          <>
+            <div>
+              <label className="block text-amber-200 font-bold mb-3">Your Color</label>
+              <div className="grid grid-cols-2 gap-4">
+                <button
+                  onClick={() => setPlayerColor('w')}
+                  className={`py-3 px-6 rounded-lg font-semibold transition-all ${
+                    playerColor === 'w'
+                      ? 'bg-amber-100 text-stone-900 shadow-lg scale-105'
+                      : 'bg-stone-700 text-stone-300 hover:bg-stone-600'
+                  }`}
+                >
+                  ⚪ White
+                </button>
+                <button
+                  onClick={() => setPlayerColor('b')}
+                  className={`py-3 px-6 rounded-lg font-semibold transition-all ${
+                    playerColor === 'b'
+                      ? 'bg-stone-900 text-amber-100 border-2 border-amber-700 scale-105'
+                      : 'bg-stone-700 text-stone-300 hover:bg-stone-600'
+                  }`}
+                >
+                  ⚫ Black
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-amber-200 font-bold mb-3">
+                AI Difficulty: <span className="text-amber-400">{DIFFICULTIES[aiLevel] || 'Custom'}</span>
+              </label>
+              <input
+                type="range"
+                min="1"
+                max="20"
+                value={aiLevel}
+                onChange={(e) => setAiLevel(parseInt(e.target.value))}
+                className="w-full h-3 bg-stone-900 rounded-lg appearance-none cursor-pointer accent-amber-600"
+              />
+              <div className="flex justify-between text-xs text-stone-500 mt-1">
+                <span>Easy</span>
+                <span>Hard</span>
+              </div>
+            </div>
+          </>
+        )}
+
+        <button
+          onClick={onStart}
+          className="w-full py-4 px-6 rounded-lg font-bold text-xl bg-amber-600 text-white hover:bg-amber-500 transition-all transform hover:scale-105 active:scale-95 shadow-lg"
+        >
+          Start Game 🎮
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ChessGame() {
+  const [game, setGame] = useState(new Chess());
+  const [history, setHistory] = useState([new Chess().fen()]);
+  const [currentMoveIndex, setCurrentMoveIndex] = useState(0);
+  const [moveLog, setMoveLog] = useState([]);
+  const [capturedPieces, setCapturedPieces] = useState({ white: [], black: [] });
+  
+  const [gameMode, setGameMode] = useState('human');
+  const [aiLevel, setAiLevel] = useState(5);
+  const [playerColor, setPlayerColor] = useState('w');
   const [isThinking, setIsThinking] = useState(false);
   const [showSettings, setShowSettings] = useState(true);
   
   const stockfishRef = useRef(null);
 
-  // --- THEME CONFIGURATION ---
-  const woodTheme = {
-    pageBg: "bg-[#272522]", // Espresso
-    container: "max-w-6xl mx-auto font-serif",
-    heading: "text-4xl font-bold text-center text-[#e8d0aa] mb-8 tracking-wider",
-    panelBg: "bg-[#302b28] border-2 border-[#5c4d3c] shadow-2xl rounded-sm",
-    textMain: "text-[#d4c4b5]",
-    textHighlight: "text-[#e8a87c]",
-    btnPrimary: "bg-[#8b5a2b] hover:bg-[#a66d35] text-[#f0d9b5] border-b-4 border-[#5e3c1d] active:border-b-0 active:translate-y-1",
-    btnSecondary: "bg-[#4a4238] hover:bg-[#5c5346] text-[#c0b4a5]",
-    btnActive: "bg-[#8b5a2b] text-[#f0d9b5] shadow-[inset_0_2px_4px_rgba(0,0,0,0.6)]",
-    boardDark: '#b58863',
-    boardLight: '#f0d9b5',
-  };
-
-  // --- ENGINE INITIALIZATION (CORS FIX) ---
   useEffect(() => {
     if (typeof window !== 'undefined' && !stockfishRef.current) {
-      const STOCKFISH_URL = 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js';
-      
-      fetch(STOCKFISH_URL)
+      fetch('https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js')
         .then(res => res.text())
         .then(text => {
           const blob = new Blob([text], { type: 'application/javascript' });
@@ -46,7 +238,7 @@ const ChessGame = () => {
           stockfishRef.current = new Worker(workerUrl);
           stockfishRef.current.postMessage('uci');
         })
-        .catch(err => console.error('Stockfish failed to load:', err));
+        .catch(err => console.error('Failed to load AI:', err));
     }
 
     return () => {
@@ -54,7 +246,6 @@ const ChessGame = () => {
     };
   }, []);
 
-  // --- AI LOGIC (OPTIMIZED) ---
   const makeAIMove = useCallback(() => {
     if (!stockfishRef.current || isThinking) return;
 
@@ -69,6 +260,7 @@ const ChessGame = () => {
         if (moveMatch) {
           const move = moveMatch[1];
           try {
+            const targetSquare = game.get(move.substring(2, 4));
             const moveResult = game.move({
               from: move.substring(0, 2),
               to: move.substring(2, 4),
@@ -76,12 +268,21 @@ const ChessGame = () => {
             });
 
             if (moveResult) {
+              if (targetSquare) {
+                setCapturedPieces(prev => ({
+                  ...prev,
+                  [game.turn() === 'w' ? 'white' : 'black']: [
+                    ...prev[game.turn() === 'w' ? 'white' : 'black'],
+                    targetSquare.type
+                  ]
+                }));
+              }
+
               const newFen = game.fen();
               setGame(new Chess(newFen));
               const moveNotation = `${game.turn() === 'w' ? 'Black' : 'White'}: ${moveResult.san}`;
               setMoveLog(prev => [...prev, moveNotation]);
               
-              // Update History
               setHistory(prev => {
                 const newHistory = [...prev, newFen];
                 setCurrentMoveIndex(newHistory.length - 1);
@@ -89,7 +290,7 @@ const ChessGame = () => {
               });
             }
           } catch (error) {
-            console.error('Invalid AI move:', error);
+            console.error('Invalid AI move');
           }
         }
         
@@ -100,51 +301,33 @@ const ChessGame = () => {
 
     stockfishRef.current.addEventListener('message', handleMessage);
     
-    // DIFFICULTY LOGIC
-    let depth = 1;
-    if (aiLevel >= 16) depth = 12;
-    else if (aiLevel >= 12) depth = 8;
-    else if (aiLevel >= 8) depth = 5;
-    else if (aiLevel >= 4) depth = 3;
-    
-    // Skill Level (0-20)
+    let depth = Math.max(1, Math.min(12, Math.floor(aiLevel / 2)));
     const skillLevel = Math.max(0, aiLevel - 1);
     stockfishRef.current.postMessage(`setoption name Skill Level value ${skillLevel}`);
     
-    // For very low levels, reduce thinking time to minimum to force "rash" decisions
     if (aiLevel <= 3) {
       stockfishRef.current.postMessage('setoption name Minimum Thinking Time value 0');
     }
 
     stockfishRef.current.postMessage(`position fen ${currentFen}`);
-    
-    // Time limiting: Cap calculation time based on level (250ms to 1s)
-    const maxTime = Math.min(250 + (aiLevel * 40), 1000); 
+    const maxTime = Math.min(250 + (aiLevel * 40), 1000);
     stockfishRef.current.postMessage(`go depth ${depth} movetime ${maxTime}`);
-
   }, [game, aiLevel, isThinking]);
 
-  // --- TRIGGER AI MOVE ---
   useEffect(() => {
     if (gameMode === 'ai' && !showSettings && game.turn() !== playerColor && !game.isGameOver() && !isThinking) {
-      // 50ms delay is enough for UI to update, making it feel instant
-      const timer = setTimeout(() => {
-        makeAIMove();
-      }, 50);
+      const timer = setTimeout(() => makeAIMove(), 50);
       return () => clearTimeout(timer);
     }
   }, [game, gameMode, playerColor, showSettings, makeAIMove, isThinking]);
 
-  // --- HUMAN MOVE ---
   const onDrop = useCallback((sourceSquare, targetSquare) => {
-    // 1. Block moves if reviewing history
     if (currentMoveIndex !== history.length - 1) return false;
-    
-    // 2. Block moves if AI turn or Thinking
     if (gameMode === 'ai' && game.turn() !== playerColor) return false;
     if (isThinking) return false;
 
     try {
+      const capturedPiece = game.get(targetSquare);
       const move = game.move({
         from: sourceSquare,
         to: targetSquare,
@@ -152,12 +335,21 @@ const ChessGame = () => {
       });
 
       if (move) {
+        if (capturedPiece) {
+          setCapturedPieces(prev => ({
+            ...prev,
+            [game.turn() === 'w' ? 'white' : 'black']: [
+              ...prev[game.turn() === 'w' ? 'white' : 'black'],
+              capturedPiece.type
+            ]
+          }));
+        }
+
         const newFen = game.fen();
         setGame(new Chess(newFen));
         const moveNotation = `${game.turn() === 'w' ? 'Black' : 'White'}: ${move.san}`;
         setMoveLog(prev => [...prev, moveNotation]);
         
-        // Update History
         const newHistory = [...history, newFen];
         setHistory(newHistory);
         setCurrentMoveIndex(newHistory.length - 1);
@@ -170,13 +362,13 @@ const ChessGame = () => {
     return false;
   }, [game, history, currentMoveIndex, gameMode, playerColor, isThinking]);
 
-  // --- GAME HELPERS ---
   const resetGame = () => {
     const newGame = new Chess();
     setGame(newGame);
     setHistory([newGame.fen()]);
     setCurrentMoveIndex(0);
     setMoveLog([]);
+    setCapturedPieces({ white: [], black: [] });
     setShowSettings(true);
     setIsThinking(false);
   };
@@ -195,215 +387,74 @@ const ChessGame = () => {
     if (direction === 'end') setCurrentMoveIndex(history.length - 1);
   };
 
-  const getGameStatus = () => {
-    if (game.isGameOver()) {
-      if (game.isCheckmate()) return `Checkmate! ${game.turn() === 'w' ? 'Black' : 'White'} wins!`;
-      if (game.isDraw()) return "Draw!";
-      return "Game Over!";
-    }
-    if (game.inCheck()) return "Check!";
-    if (isThinking) return "AI is thinking...";
-    return `${game.turn() === 'w' ? 'White' : 'Black'} to move`;
-  };
-
-  const getDifficultyLabel = (level) => {
-    if (level <= 3) return 'Beginner';
-    if (level <= 7) return 'Intermediate';
-    if (level <= 12) return 'Advanced';
-    if (level <= 16) return 'Expert';
-    return 'Master';
-  };
-
-  // --- RENDER ---
   return (
-    <div className={`min-h-screen ${woodTheme.pageBg} p-4 md:p-8`}>
-      <div className={woodTheme.container}>
-        <h1 className={woodTheme.heading}>
-          Grandmaster Chess {gameMode === 'ai' ? '- vs Stockfish' : ''}
+    <div className="min-h-screen bg-gradient-to-br from-stone-900 via-stone-800 to-stone-900 p-4 md:p-8">
+      <div className="max-w-7xl mx-auto">
+        <h1 className="text-4xl md:text-5xl font-bold text-center text-amber-300 mb-8 tracking-wide drop-shadow-lg">
+          ♟️ Chess Master {gameMode === 'ai' && '🤖'}
         </h1>
 
         {showSettings ? (
-          <div className={`${woodTheme.panelBg} p-8 mb-8`}>
-            <h2 className="text-2xl font-bold text-[#e8d0aa] mb-6 border-b border-[#5c4d3c] pb-2">Game Setup</h2>
-            
-            <div className="space-y-6">
-              {/* Game Mode */}
-              <div>
-                <label className={`block ${woodTheme.textMain} font-bold mb-3`}>Select Mode</label>
-                <div className="flex gap-4">
-                  <button
-                    onClick={() => setGameMode('human')}
-                    className={`flex-1 py-3 px-6 rounded font-semibold transition-all ${
-                      gameMode === 'human' ? woodTheme.btnActive : woodTheme.btnSecondary
-                    }`}
-                  >
-                    Human vs Human
-                  </button>
-                  <button
-                    onClick={() => setGameMode('ai')}
-                    className={`flex-1 py-3 px-6 rounded font-semibold transition-all ${
-                      gameMode === 'ai' ? woodTheme.btnActive : woodTheme.btnSecondary
-                    }`}
-                  >
-                    Human vs AI
-                  </button>
-                </div>
-              </div>
-
-              {/* AI Controls */}
-              {gameMode === 'ai' && (
-                <>
-                  <div>
-                    <label className={`block ${woodTheme.textMain} font-bold mb-3`}>Choose Side</label>
-                    <div className="flex gap-4">
-                      <button
-                        onClick={() => setPlayerColor('w')}
-                        className={`flex-1 py-3 px-6 rounded font-semibold transition-all ${
-                          playerColor === 'w' 
-                            ? "bg-[#f0d9b5] text-[#2c241b] shadow-lg" 
-                            : woodTheme.btnSecondary
-                        }`}
-                      >
-                        White
-                      </button>
-                      <button
-                        onClick={() => setPlayerColor('b')}
-                        className={`flex-1 py-3 px-6 rounded font-semibold transition-all ${
-                          playerColor === 'b' 
-                            ? "bg-[#2c241b] text-[#f0d9b5] border border-[#5c4d3c]" 
-                            : woodTheme.btnSecondary
-                        }`}
-                      >
-                        Black
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className={`block ${woodTheme.textMain} font-bold mb-3`}>
-                      Difficulty: <span className="text-[#e8a87c]">{getDifficultyLabel(aiLevel)}</span>
-                    </label>
-                    <input
-                      type="range"
-                      min="1"
-                      max="20"
-                      value={aiLevel}
-                      onChange={(e) => setAiLevel(parseInt(e.target.value))}
-                      className="w-full h-3 bg-[#1e1b18] rounded-lg appearance-none cursor-pointer accent-[#8b5a2b]"
-                    />
-                  </div>
-                </>
-              )}
-
-              <button
-                onClick={startGame}
-                className={`w-full py-4 px-6 rounded font-bold transition-all text-xl ${woodTheme.btnPrimary} mt-4`}
-              >
-                Start Game
-              </button>
-            </div>
-          </div>
+          <GameSettings
+            gameMode={gameMode}
+            setGameMode={setGameMode}
+            playerColor={playerColor}
+            setPlayerColor={setPlayerColor}
+            aiLevel={aiLevel}
+            setAiLevel={setAiLevel}
+            onStart={startGame}
+          />
         ) : (
-          <div className="flex flex-col lg:flex-row gap-8">
-            <div className="flex-1 max-w-2xl mx-auto">
-              <div className={`${woodTheme.panelBg} p-4 mb-4 text-center`}>
-                <p className={`text-2xl font-bold ${game.inCheck() ? 'text-red-400' : woodTheme.textHighlight}`}>
-                  {getGameStatus()}
-                </p>
-              </div>
+          <div className="flex flex-col lg:flex-row gap-6">
+            <div className="flex-1 max-w-3xl mx-auto w-full">
+              <GameStatus game={game} isThinking={isThinking} />
 
-              <div className="rounded-sm overflow-hidden shadow-2xl border-4 border-[#4a3c31]">
-                <Chessboard 
-                  position={history[currentMoveIndex]} // View historical or current position
+              <div className="mt-4 rounded-lg overflow-hidden shadow-2xl border-4 border-amber-900">
+                <Chessboard
+                  position={history[currentMoveIndex]}
                   onPieceDrop={onDrop}
                   boardOrientation={playerColor === 'w' ? 'white' : 'black'}
-                  customDarkSquareStyle={{ backgroundColor: woodTheme.boardDark }}
-                  customLightSquareStyle={{ backgroundColor: woodTheme.boardLight }}
+                  customDarkSquareStyle={{ backgroundColor: '#b58863' }}
+                  customLightSquareStyle={{ backgroundColor: '#f0d9b5' }}
                   animationDuration={200}
                 />
               </div>
 
-              {/* Navigation Controls */}
-              <div className="flex justify-center gap-2 mt-4 bg-[#302b28] p-3 rounded shadow-inner border border-[#5c4d3c]">
-                <button 
-                  onClick={() => navigateHistory('start')}
-                  disabled={currentMoveIndex === 0}
-                  className="px-4 py-2 bg-[#4a4238] text-[#f0d9b5] rounded hover:bg-[#5c5346] disabled:opacity-50 disabled:cursor-not-allowed font-bold"
-                  title="Start"
-                >
-                  «
-                </button>
-                <button 
-                  onClick={() => navigateHistory('prev')}
-                  disabled={currentMoveIndex === 0}
-                  className="px-4 py-2 bg-[#4a4238] text-[#f0d9b5] rounded hover:bg-[#5c5346] disabled:opacity-50 disabled:cursor-not-allowed font-bold"
-                  title="Previous"
-                >
-                  ‹
-                </button>
-                
-                <span className="px-4 py-2 text-[#d4c4b5] font-mono flex items-center min-w-[100px] justify-center">
-                   Move {Math.floor(currentMoveIndex / 2) + 1}
-                </span>
-
-                <button 
-                  onClick={() => navigateHistory('next')}
-                  disabled={currentMoveIndex === history.length - 1}
-                  className="px-4 py-2 bg-[#4a4238] text-[#f0d9b5] rounded hover:bg-[#5c5346] disabled:opacity-50 disabled:cursor-not-allowed font-bold"
-                  title="Next"
-                >
-                  ›
-                </button>
-                <button 
-                  onClick={() => navigateHistory('end')}
-                  disabled={currentMoveIndex === history.length - 1}
-                  className="px-4 py-2 bg-[#4a4238] text-[#f0d9b5] rounded hover:bg-[#5c5346] disabled:opacity-50 disabled:cursor-not-allowed font-bold"
-                  title="Current"
-                >
-                  »
-                </button>
+              <div className="mt-4">
+                <HistoryControls
+                  currentIndex={currentMoveIndex}
+                  historyLength={history.length}
+                  onNavigate={navigateHistory}
+                  disabled={isThinking}
+                />
               </div>
 
               <div className="flex gap-4 mt-6">
-                <button 
+                <button
                   onClick={resetGame}
-                  className={`flex-1 py-3 px-6 rounded font-bold transition-all ${woodTheme.btnPrimary}`}
+                  className="flex-1 py-3 px-6 rounded-lg font-bold bg-red-700 text-white hover:bg-red-600 transition-all transform hover:scale-105 active:scale-95 shadow-lg"
                 >
-                  New Game
+                  🔄 New Game
                 </button>
-                <button 
+                <button
                   onClick={() => setShowSettings(true)}
-                  className={`flex-1 py-3 px-6 rounded font-bold transition-all ${woodTheme.btnSecondary}`}
+                  className="flex-1 py-3 px-6 rounded-lg font-bold bg-stone-700 text-amber-100 hover:bg-stone-600 transition-all transform hover:scale-105 active:scale-95 shadow-lg"
                 >
-                  Settings
+                  ⚙️ Settings
                 </button>
               </div>
             </div>
 
-            <div className="lg:w-80">
-              <div className={`${woodTheme.panelBg} p-6 h-full`}>
-                <h2 className={`text-xl font-bold ${woodTheme.textHighlight} mb-4 border-b border-[#5c4d3c] pb-2`}>
-                  Move History
-                </h2>
-                <div className="bg-[#1e1b18] rounded p-4 h-[400px] overflow-y-auto font-mono text-sm border border-[#5c4d3c]">
-                  {moveLog.map((move, index) => (
-                    <div 
-                      key={index} 
-                      className={`py-1 border-b border-[#302b28] flex ${index === currentMoveIndex - 1 ? 'bg-[#3b352f] text-[#e8a87c]' : 'text-[#a89f91]'}`}
-                    >
-                      <span className="w-8 opacity-50">{Math.floor(index / 2) + 1}.</span>
-                      <span>{move.split(': ')[1]}</span>
-                    </div>
-                  ))}
-                  {moveLog.length === 0 && <span className="text-gray-600 italic">Game start</span>}
-                </div>
-              </div>
+            <div className="lg:w-80 space-y-4">
+              <CapturedPieces captured={capturedPieces.white} color="white" />
+              <CapturedPieces captured={capturedPieces.black} color="black" />
+              <MoveHistory moves={moveLog} currentIndex={currentMoveIndex} />
             </div>
           </div>
         )}
       </div>
     </div>
   );
-};
+}
 
 export default ChessGame;
